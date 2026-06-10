@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DecomposeAI - Educational Diagram Decomposition & PPT Platform</title>
+    <!-- Modern Premium Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-logo">
+                <i class="fa-solid fa-cubes-stacked logo-icon"></i>
+                <div class="logo-text">
+                    <h1>Decompose<span>AI</span></h1>
+                    <p>Educational Diagram Decomposition & PPT Platform</p>
+                </div>
+            </div>
+            <div class="header-status">
+                <span class="status-dot online"></span>
+                <span class="status-text">Local Server Connected</span>
+            </div>
+        </header>
+
+        <!-- Main Workspace Grid -->
+        <main class="app-workspace">
+            <!-- Left Panel: Job Tracker & File Upload -->
+            <section class="left-panel glass-card">
+                <div class="section-header">
+                    <h2><i class="fa-solid fa-cloud-arrow-up"></i> Upload & Batches</h2>
+                </div>
+                
+                <!-- Upload Dropzone -->
+                <div class="upload-zone" id="dropzone">
+                    <input type="file" id="file-input" multiple accept=".jpg,.jpeg,.png,.webp,.svg,.pdf" style="display: none;">
+                    <i class="fa-solid fa-file-invoice-paragraph upload-icon"></i>
+                    <p class="upload-title">Drag & Drop Diagrams</p>
+                    <p class="upload-subtitle">Supports PNG, JPG, WEBP, SVG, PDF (Max 10 files)</p>
+                    <button class="btn btn-secondary" onclick="document.getElementById('file-input').click()">
+                        Select Files
+                    </button>
+                </div>
+
+                <!-- Batch Jobs List -->
+                <div class="batches-section">
+                    <h3>Active Batches</h3>
+                    <div class="batches-list" id="batches-list">
+                        <div class="empty-state">
+                            <p>No uploaded batches yet. Drop files above to begin.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Pipeline Console Logs -->
+                <div class="console-section">
+                    <h3>Pipeline Log Console</h3>
+                    <div class="console-box" id="console-logs">
+                        <div class="log-line system">[System] Waiting for batch execution...</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Center Panel: Interactive Slide Editor Canvas -->
+            <section class="center-panel glass-card">
+                <div class="editor-header">
+                    <div class="editor-title-group">
+                        <h2><i class="fa-solid fa-sliders"></i> Slide Canvas</h2>
+                        <span class="slide-indicator" id="slide-indicator">No Slide Selected</span>
+                    </div>
+                    <div class="editor-controls" style="display: flex; align-items: center; gap: 8px;">
+                        <input type="checkbox" id="toggle-relations" checked style="cursor: pointer; width: 16px; height: 16px;">
+                        <span class="toggle-label" style="font-size: 12px; font-weight: 500; color: var(--text-secondary);">Show Graph Relationships</span>
+                    </div>
+                    <div class="slide-navigation" id="slide-nav" style="display: none;">
+                        <button class="btn btn-icon" id="prev-slide-btn"><i class="fa-solid fa-chevron-left"></i></button>
+                        <span class="slide-counter" id="slide-counter">1 / 1</span>
+                        <button class="btn btn-icon" id="next-slide-btn"><i class="fa-solid fa-chevron-right"></i></button>
+                    </div>
+                </div>
+
+                <!-- Main Virtual Presentation Workspace -->
+                <div class="canvas-viewport" id="canvas-viewport">
+                    <!-- Blank/Empty Workspace screen -->
+                    <div class="canvas-empty" id="canvas-empty">
+                        <i class="fa-solid fa-pen-ruler canvas-empty-icon"></i>
+                        <h3>Interactive Layer Canvas</h3>
+                        <p>Upload a diagram or select a processed slide to view, drag, and modify decomposed PowerPoint objects in real-time.</p>
+                    </div>
+
+                    <!-- Interactive Canvas Container -->
+                    <div class="canvas-container" id="canvas-container" style="display: none;">
+                        <!-- The original image serves as background guide -->
+                        <img id="canvas-bg" class="canvas-bg-image" src="" alt="Background Diagram">
+                        <!-- Dynamic bounding box overlays are injected here -->
+                        <div class="canvas-overlays" id="canvas-overlays"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Panel: Layer Inspector & PPT Export -->
+            <section class="right-panel glass-card">
+                <!-- Tab Headers -->
+                <div class="tab-headers">
+                    <button class="tab-btn active" id="tab-layers"><i class="fa-solid fa-layer-group"></i> Layer Tree</button>
+                    <button class="tab-btn" id="tab-meta"><i class="fa-solid fa-circle-info"></i> Info & Routing</button>
+                </div>
+
+                <!-- Tab 1: Layer Tree Inspector -->
+                <div class="tab-content" id="layers-content">
+                    <div class="layers-header">
+                        <h3>Extracted Objects</h3>
+                        <button class="btn btn-small" id="reset-slide-btn" style="display: none;"><i class="fa-solid fa-rotate-left"></i> Reset</button>
+                    </div>
+                    <div class="layers-tree" id="layers-tree">
+                        <div class="empty-state">
+                            <p>Select a processed slide to inspect layers.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab 2: Info & Routing Content -->
+                <div class="tab-content" id="meta-content" style="display: none;">
+                    <div class="info-section">
+                        <h3>Slide Details</h3>
+                        <table class="info-table">
+                            <tr>
+                                <td>Diagram Type</td>
+                                <td id="info-content-type">-</td>
+                            </tr>
+                            <tr>
+                                <td>File Format</td>
+                                <td id="info-file-type">-</td>
+                            </tr>
+                            <tr>
+                                <td>Resolution</td>
+                                <td id="info-resolution">-</td>
+                            </tr>
+                            <tr>
+                                <td>Confidence Score</td>
+                                <td id="info-confidence">-</td>
+                            </tr>
+                        </table>
+                    </div>
+
+                    <div class="routing-section">
+                        <h3>Workflow Routing</h3>
+                        <!-- Routing Alerts -->
+                        <div class="routing-alert" id="routing-alert">
+                            <i class="fa-solid fa-shield-halved routing-alert-icon"></i>
+                            <div class="routing-alert-text">
+                                <h4 id="routing-title">System Idle</h4>
+                                <p id="routing-desc">Upload diagram files to trigger pipeline analysis and routing checks.</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- V2 Performance Latency Dashboard -->
+                    <div class="metrics-section" style="margin-top: 20px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 15px;">
+                        <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 6px;"><i class="fa-solid fa-chart-line"></i> Execution Latencies</h3>
+                        <div class="metrics-grid" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;">
+                            <div class="metric-card" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); padding: 8px; border-radius: 6px;">
+                                <span class="metric-title" style="display: block; font-size: 10px; color: var(--text-secondary); text-transform: uppercase;">Classify</span>
+                                <span class="metric-value" id="metric-classify" style="font-size: 14px; font-weight: 700; color: #38bdf8;">-</span>
+                            </div>
+                            <div class="metric-card" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); padding: 8px; border-radius: 6px;">
+                                <span class="metric-title" style="display: block; font-size: 10px; color: var(--text-secondary); text-transform: uppercase;">Detect</span>
+                                <span class="metric-value" id="metric-detect" style="font-size: 14px; font-weight: 700; color: #38bdf8;">-</span>
+                            </div>
+                            <div class="metric-card" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); padding: 8px; border-radius: 6px;">
+                                <span class="metric-title" style="display: block; font-size: 10px; color: var(--text-secondary); text-transform: uppercase;">SAM2 Segment</span>
+                                <span class="metric-value" id="metric-segment" style="font-size: 14px; font-weight: 700; color: #38bdf8;">-</span>
+                            </div>
+                            <div class="metric-card" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); padding: 8px; border-radius: 6px;">
+                                <span class="metric-title" style="display: block; font-size: 10px; color: var(--text-secondary); text-transform: uppercase;">PaddleOCR</span>
+                                <span class="metric-value" id="metric-ocr" style="font-size: 14px; font-weight: 700; color: #38bdf8;">-</span>
+                            </div>
+                            <div class="metric-card" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); padding: 8px; border-radius: 6px;">
+                                <span class="metric-title" style="display: block; font-size: 10px; color: var(--text-secondary); text-transform: uppercase;">Understanding</span>
+                                <span class="metric-value" id="metric-understand" style="font-size: 14px; font-weight: 700; color: #38bdf8;">-</span>
+                            </div>
+                            <div class="metric-card" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); padding: 8px; border-radius: 6px;">
+                                <span class="metric-title" style="display: block; font-size: 10px; color: var(--text-secondary); text-transform: uppercase;">PPT Compile</span>
+                                <span class="metric-value" id="metric-ppt" style="font-size: 14px; font-weight: 700; color: #38bdf8;">-</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Action Controls Footer -->
+                <div class="panel-actions">
+                    <button class="btn btn-primary btn-block" id="save-slide-btn" disabled>
+                        <i class="fa-solid fa-floppy-disk"></i> Save Layout Changes
+                    </button>
+                    <button class="btn btn-accent btn-block" id="export-ppt-btn" disabled>
+                        <i class="fa-solid fa-file-powerpoint"></i> Export Compiled PPTX
+                    </button>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- UI Scripts -->
+    <script src="app.js"></script>
+</body>
+</html>

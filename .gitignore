@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Databases
+*.db
+backend/storage/*.db
+
+# Temporary and Output folders
+temp_unzip_canvas/
+temp_unzip_ours/
+dry_run_output/
+backend/storage/temp/
+backend/storage/poc_outputs/
+backend/storage/batches/
+
+# IDE files
+.vscode/
+.idea/
+
+# PPTX files (mostly generated output and temporary files)
+*.pptx
+!test_data/*.pptx
