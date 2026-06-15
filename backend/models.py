@@ -28,6 +28,7 @@ class DbSlideMetadata(Base):
     file_type = Column(String, default="PNG")
     content_type = Column(String, default="EducationalDiagram")
     metrics_json = Column(JSON, nullable=True) # stores execution times per stage
+    occlusion_graph_json = Column(String, nullable=True) # stores serialized occlusion pairs
     
     batch = relationship("DbBatchJob", back_populates="slides")
     components = relationship("DbComponentMetadata", back_populates="slide", cascade="all, delete-orphan")
@@ -53,8 +54,14 @@ class DbComponentMetadata(Base):
     z_index = Column(Integer, default=0)
     associated_label_id = Column(String, nullable=True)
     associated_object_id = Column(String, nullable=True)
+    is_occluded = Column(Boolean, default=False)
+    amodal_mask_path = Column(String, nullable=True)
+    polygon_vertices_json = Column(String, nullable=True)
+    reconstruction_confidence = Column(Float, nullable=True)
+    reconstruction_source = Column(String, nullable=True)
     
     slide = relationship("DbSlideMetadata", back_populates="components")
+
 
 class DbRelationship(Base):
     __tablename__ = "relationships"

@@ -36,6 +36,12 @@ class ComponentMetadata(BaseModel):
     z_index: int = Field(0, description="Z-index layering order")
     associated_label_id: Optional[str] = Field(None, description="ID of text label associated with this object")
     associated_object_id: Optional[str] = Field(None, description="ID of object this label or arrow points to")
+    is_occluded: bool = Field(False, description="Whether the component is partially hidden by another component")
+    amodal_mask_path: Optional[str] = Field(None, description="Path to the reconstructed/amodal transparent PNG layer")
+    polygon_vertices_json: Optional[str] = Field(None, description="Predicted boundary polygon coordinates JSON")
+    reconstruction_confidence: Optional[float] = Field(None, description="Amodal reconstruction confidence score")
+    reconstruction_source: Optional[str] = Field(None, description="Amodal reconstruction source (vision_llm, simulated_fallback, etc.)")
+
 
 class RelationshipMetadata(BaseModel):
     label_id: str = Field(description="ID of the text label")
@@ -54,6 +60,7 @@ class SlideMetadata(BaseModel):
     file_type: str = Field("PNG", description="Detected file type")
     content_type: str = Field("EducationalDiagram", description="Detected diagram type")
     relationships: List[RelationshipMetadata] = Field(default=[], description="Structured relationships between label, arrows, and target objects")
+    occlusion_graph_json: Optional[str] = Field(None, description="Serialized occlusion graph JSON")
 
 class BatchJob(BaseModel):
     batch_id: str = Field(description="Unique batch task ID")

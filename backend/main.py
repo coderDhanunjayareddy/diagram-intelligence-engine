@@ -35,8 +35,32 @@ queue_manager = QueueManager()
 def startup_event():
     # Initialize SQL database tables
     Base.metadata.create_all(bind=engine)
+    
+    # Self-healing V3 schema migrations
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        for col, col_type in [("is_occluded", "BOOLEAN DEFAULT 0"), 
+                              ("amodal_mask_path", "VARCHAR"),
+                              ("polygon_vertices_json", "VARCHAR"),
+                              ("reconstruction_confidence", "FLOAT"),
+                              ("reconstruction_source", "VARCHAR")]:
+            try:
+                conn.execute(text(f"SELECT {col} FROM components_metadata LIMIT 1"))
+            except Exception:
+                print(f"[Startup] Migrating components_metadata table: adding {col} column...")
+                conn.execute(text(f"ALTER TABLE components_metadata ADD COLUMN {col} {col_type}"))
+                conn.commit()
+                
+        try:
+            conn.execute(text("SELECT occlusion_graph_json FROM slides_metadata LIMIT 1"))
+        except Exception:
+            print("[Startup] Migrating slides_metadata table: adding occlusion_graph_json column...")
+            conn.execute(text("ALTER TABLE slides_metadata ADD COLUMN occlusion_graph_json VARCHAR"))
+            conn.commit()
+            
     queue_manager.start()
-    print("Database tables initialized. V2 main server active.")
+    print("Database tables initialized. V3 main server active.")
+
 
 @app.on_event("shutdown")
 async def shutdown_event():

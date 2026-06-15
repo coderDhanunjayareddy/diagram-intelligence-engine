@@ -131,7 +131,9 @@ class QueueManager:
                         visible=db_comp.visible,
                         z_index=db_comp.z_index,
                         associated_label_id=db_comp.associated_label_id,
-                        associated_object_id=db_comp.associated_object_id
+                        associated_object_id=db_comp.associated_object_id,
+                        is_occluded=db_comp.is_occluded,
+                        amodal_mask_path=db_comp.amodal_mask_path
                     ))
                 
                 # Load relationships
@@ -243,7 +245,9 @@ class QueueManager:
                         visible=comp.visible,
                         z_index=comp.z_index,
                         associated_label_id=comp.associated_label_id,
-                        associated_object_id=comp.associated_object_id
+                        associated_object_id=comp.associated_object_id,
+                        is_occluded=comp.is_occluded,
+                        amodal_mask_path=comp.amodal_mask_path
                     )
                     db.add(db_comp)
                 db.commit()
@@ -269,8 +273,8 @@ class QueueManager:
 
     def _generate_erased_background(self, slide_dir: str, components: List[ComponentMetadata]):
         """
-        Creates a 'background.png' template inside masks/ where the bounding boxes
-        of all currently visible components are filled with the sampled background color.
+        Creates a 'background.png' template inside masks/ by running LaMa inpainting
+        to cleanly remove all visible elements and restore background texture.
         """
         original_file = None
         dir_original = os.path.join(slide_dir, "original")
@@ -287,25 +291,64 @@ class QueueManager:
         if img is None:
             return
             
-        # Sample background color from corners
-        corners = [img[0, 0], img[0, -1], img[-1, 0], img[-1, -1]]
-        bg_color = np.mean(corners, axis=0).astype(int).tolist()
-        bg_color_tuple = (bg_color[0], bg_color[1], bg_color[2])
+        h, w = img.shape[:2]
         
-        # Erase bounding boxes
+        # Build binary inpainting mask for all visible components
+        inpaint_mask = np.zeros((h, w), dtype=np.uint8)
+        has_elements = False
+        
         for comp in components:
             if not comp.visible:
                 continue
-            x, y, w, h = comp.box
-            x_start = max(0, x - 2)
-            y_start = max(0, y - 2)
-            x_end = min(img.shape[1], x + w + 2)
-            y_end = min(img.shape[0], y + h + 2)
-            cv2.rectangle(img, (x_start, y_start), (x_end, y_end), bg_color_tuple, -1)
+            x, y, cw, ch = comp.box
+            # Slightly expand box to clean borders
+            x_start = max(0, x - 3)
+            y_start = max(0, y - 3)
+            x_end = min(w, x + cw + 3)
+            y_end = min(h, y + ch + 3)
+            cv2.rectangle(inpaint_mask, (x_start, y_start), (x_end, y_end), 255, -1)
+            has_elements = True
             
         background_path = os.path.join(slide_dir, "masks", "background.png")
         os.makedirs(os.path.dirname(background_path), exist_ok=True)
-        cv2.imwrite(background_path, img)
+        
+        # Try running LaMa inpainting
+        inpainted_success = False
+        if has_elements:
+            try:
+                from simple_lama_inpainting import SimpleLama
+                from PIL import Image
+                
+                print("[QueueManager] Running LaMa inpainting to clean background canvas...")
+                simple_lama = SimpleLama()
+                pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+                pil_mask = Image.fromarray(inpaint_mask).convert("L")
+                
+                inpainted_pil = simple_lama(pil_img, pil_mask)
+                inpainted_bg = cv2.cvtColor(np.array(inpainted_pil), cv2.COLOR_RGB2BGR)
+                cv2.imwrite(background_path, inpainted_bg)
+                inpainted_success = True
+                print("[QueueManager] LaMa background restoration complete.")
+            except Exception as e:
+                print(f"[QueueManager] LaMa inpainting failed: {e}. Falling back to solid-color eraser.")
+                
+        if not inpainted_success:
+            # V2 Fallback: Solid-Color Background Eraser
+            corners = [img[0, 0], img[0, -1], img[-1, 0], img[-1, -1]]
+            bg_color = np.mean(corners, axis=0).astype(int).tolist()
+            bg_color_tuple = (bg_color[0], bg_color[1], bg_color[2])
+            
+            for comp in components:
+                if not comp.visible:
+                    continue
+                x, y, cw, ch = comp.box
+                x_start = max(0, x - 2)
+                y_start = max(0, y - 2)
+                x_end = min(w, x + cw + 2)
+                y_end = min(h, y + ch + 2)
+                cv2.rectangle(img, (x_start, y_start), (x_end, y_end), bg_color_tuple, -1)
+            cv2.imwrite(background_path, img)
+
 
     async def _worker_loop(self):
         """Core background loop processing jobs one by one."""
@@ -458,6 +501,35 @@ class QueueManager:
         t_understanding = int((time.time() - t_start) * 1000)
         log_message(f"Stage 5: Understanding & Reconstruction -> Compiled {len(components)} components with {len(relationships)} relationships ({t_understanding}ms)")
         
+        # Stage 5b: V3.5 Generic Amodal Segmentation
+        t_start_v3 = time.time()
+        occlusion_graph_json = "[]"
+        try:
+            from backend.pipeline.path_inference_engine import AmodalOcclusionEngine
+            from backend.pipeline.amodal_renderer import AmodalSAMSegmenter
+            
+            solver = AmodalOcclusionEngine()
+            renderer = AmodalSAMSegmenter()
+            
+            # Solve occlusions
+            occlusion_graph, occlusion_pairs = solver.solve_occlusion(slide_original, components)
+            occlusion_graph_json = json.dumps(occlusion_graph)
+            
+            # Save occlusion graph under metadata/occlusion_graph.json
+            occlusion_graph_path = os.path.join(slide_dir, "metadata", "occlusion_graph.json")
+            with open(occlusion_graph_path, "w", encoding="utf-8") as f:
+                json.dump(occlusion_graph, f, indent=2)
+                
+            for occluded_comp, occluder_comp in occlusion_pairs:
+                log_message(f"V3.5: Reconstructing amodal layer '{occluded_comp.semantic_name}' ({occluded_comp.id}) occluded by '{occluder_comp.semantic_name}' ({occluder_comp.id})...")
+                rel_amodal_path = renderer.render_amodal(slide_original, slide_dir, occluded_comp, occluder_comp)
+                occluded_comp.amodal_mask_path = rel_amodal_path
+                log_message(f"V3.5: Reconstructed amodal mask successfully. Saved to {rel_amodal_path}.")
+        except Exception as e_v3:
+            log_message(f"V3.5: Error during amodal segmentation: {e_v3}")
+        t_reconstruction = int((time.time() - t_start_v3) * 1000)
+        log_message(f"Stage 5b: Amodal Layer Reconstruction complete ({t_reconstruction}ms)")
+        
         # Generate background.png
         self._generate_erased_background(slide_dir, components)
         
@@ -477,8 +549,10 @@ class QueueManager:
             "segmentation_time_ms": t_segmentation,
             "ocr_time_ms": t_ocr,
             "understanding_time_ms": t_understanding,
+            "reconstruction_time_ms": t_reconstruction,
             "ppt_compile_time_ms": 0
         }
+
         
         slide_meta = SlideMetadata(
             slide_index=slide_idx,
@@ -523,7 +597,8 @@ class QueueManager:
                 average_confidence=float(round(avg_conf, 2)),
                 file_type=class_res["fileType"],
                 content_type=class_res["contentType"],
-                metrics_json=metrics
+                metrics_json=metrics,
+                occlusion_graph_json=occlusion_graph_json
             )
             db.add(db_slide)
             db.flush()
@@ -546,7 +621,12 @@ class QueueManager:
                     visible=comp.visible,
                     z_index=comp.z_index,
                     associated_label_id=comp.associated_label_id,
-                    associated_object_id=comp.associated_object_id
+                    associated_object_id=comp.associated_object_id,
+                    is_occluded=comp.is_occluded,
+                    amodal_mask_path=comp.amodal_mask_path,
+                    polygon_vertices_json=comp.polygon_vertices_json,
+                    reconstruction_confidence=comp.reconstruction_confidence,
+                    reconstruction_source=comp.reconstruction_source
                 )
                 db.add(db_comp)
                 

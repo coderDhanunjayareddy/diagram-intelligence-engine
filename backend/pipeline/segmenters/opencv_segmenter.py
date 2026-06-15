@@ -112,6 +112,10 @@ class OpenCVSegmenter(ISegmenter):
                     white_mask = np.where(gray_crop > 245, 0, 255).astype(np.uint8)
                     alpha_channel = cv2.bitwise_and(alpha_channel, white_mask)
                     
+                    # If GrabCut failed to find any foreground, fall back to distance thresholding
+                    if np.sum(alpha_channel > 0) < 10:
+                        alpha_channel = np.where(dist < threshold, 0, 255).astype(np.uint8)
+                        
                 except Exception as e:
                     print(f"GrabCut failed for {det.id}: {e}, falling back to OTSU")
                     # Fallback: OTSU thresholding

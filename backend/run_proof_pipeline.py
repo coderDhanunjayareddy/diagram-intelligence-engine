@@ -39,28 +39,60 @@ TEST_FILES = [
 ]
 
 def generate_erased_background(original_path: str, components: List[ComponentMetadata], dest_path: str):
-    """Fills the bounding boxes of visible components with the background color."""
+    """Fills the bounding boxes of visible components using LaMa inpainting."""
     img = cv2.imread(original_path)
     if img is None:
         return
         
-    # Sample background color from corners
-    corners = [img[0, 0], img[0, -1], img[-1, 0], img[-1, -1]]
-    bg_color = np.mean(corners, axis=0).astype(int).tolist()
-    bg_color_tuple = (bg_color[0], bg_color[1], bg_color[2])
+    h, w = img.shape[:2]
+    inpaint_mask = np.zeros((h, w), dtype=np.uint8)
+    has_elements = False
     
-    # Erase bounding boxes of shapes/labels/arrows
     for comp in components:
         if not comp.visible:
             continue
-        x, y, w, h = comp.box
-        x_start = max(0, x - 2)
-        y_start = max(0, y - 2)
-        x_end = min(img.shape[1], x + w + 2)
-        y_end = min(img.shape[0], y + h + 2)
-        cv2.rectangle(img, (x_start, y_start), (x_end, y_end), bg_color_tuple, -1)
+        x, y, cw, ch = comp.box
+        x_start = max(0, x - 3)
+        y_start = max(0, y - 3)
+        x_end = min(w, x + cw + 3)
+        y_end = min(h, y + ch + 3)
+        cv2.rectangle(inpaint_mask, (x_start, y_start), (x_end, y_end), 255, -1)
+        has_elements = True
         
-    cv2.imwrite(dest_path, img)
+    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+    inpainted_success = False
+    if has_elements:
+        try:
+            from simple_lama_inpainting import SimpleLama
+            from PIL import Image
+            
+            simple_lama = SimpleLama()
+            pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+            pil_mask = Image.fromarray(inpaint_mask).convert("L")
+            
+            inpainted_pil = simple_lama(pil_img, pil_mask)
+            inpainted_bg = cv2.cvtColor(np.array(inpainted_pil), cv2.COLOR_RGB2BGR)
+            cv2.imwrite(dest_path, inpainted_bg)
+            inpainted_success = True
+        except Exception as e:
+            print(f"[ProofPipeline] LaMa inpainting failed: {e}. Using solid fallback.")
+            
+    if not inpainted_success:
+        corners = [img[0, 0], img[0, -1], img[-1, 0], img[-1, -1]]
+        bg_color = np.mean(corners, axis=0).astype(int).tolist()
+        bg_color_tuple = (bg_color[0], bg_color[1], bg_color[2])
+        
+        for comp in components:
+            if not comp.visible:
+                continue
+            x, y, cw, ch = comp.box
+            x_start = max(0, x - 2)
+            y_start = max(0, y - 2)
+            x_end = min(w, x + cw + 2)
+            y_end = min(h, y + ch + 2)
+            cv2.rectangle(img, (x_start, y_start), (x_end, y_end), bg_color_tuple, -1)
+        cv2.imwrite(dest_path, img)
+
 
 def run_proof_pipeline():
     print("==========================================================")
@@ -69,7 +101,31 @@ def run_proof_pipeline():
     
     # 1. Initialize database tables
     Base.metadata.create_all(bind=engine)
+    
+    # Self-healing V3 schema migrations
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        for col, col_type in [("is_occluded", "BOOLEAN DEFAULT 0"), 
+                              ("amodal_mask_path", "VARCHAR"),
+                              ("polygon_vertices_json", "VARCHAR"),
+                              ("reconstruction_confidence", "FLOAT"),
+                              ("reconstruction_source", "VARCHAR")]:
+            try:
+                conn.execute(text(f"SELECT {col} FROM components_metadata LIMIT 1"))
+            except Exception:
+                print(f"[Migration] Adding {col} column to components_metadata...")
+                conn.execute(text(f"ALTER TABLE components_metadata ADD COLUMN {col} {col_type}"))
+                conn.commit()
+                
+        try:
+            conn.execute(text("SELECT occlusion_graph_json FROM slides_metadata LIMIT 1"))
+        except Exception:
+            print("[Migration] Adding occlusion_graph_json column to slides_metadata...")
+            conn.execute(text("ALTER TABLE slides_metadata ADD COLUMN occlusion_graph_json VARCHAR"))
+            conn.commit()
+            
     db = SessionLocal()
+
     
     # Clean previous batch run
     if os.path.exists(PROOF_BATCH_DIR):
@@ -184,6 +240,34 @@ def run_proof_pipeline():
         for rel in relationships:
             log_message(f"      Mapped: [Label: '{rel.label_text}'] -> [Arrow: {rel.arrow_id}] -> [Target Shape ID: {rel.target_id}]")
             
+        # --- Stage 5b: V3.5 Generic Amodal Segmentation ---
+        t_start_v3 = time.time()
+        occlusion_graph_json = "[]"
+        try:
+            from backend.pipeline.path_inference_engine import AmodalOcclusionEngine
+            from backend.pipeline.amodal_renderer import AmodalSAMSegmenter
+            
+            solver = AmodalOcclusionEngine()
+            renderer = AmodalSAMSegmenter()
+            
+            occlusion_graph, occlusion_pairs = solver.solve_occlusion(original_dest, components)
+            occlusion_graph_json = json.dumps(occlusion_graph)
+            
+            # Save occlusion graph under metadata/occlusion_graph.json
+            occlusion_graph_path = os.path.join(dir_metadata, "occlusion_graph.json")
+            with open(occlusion_graph_path, "w", encoding="utf-8") as f:
+                json.dump(occlusion_graph, f, indent=2)
+                
+            for occluded_comp, occluder_comp in occlusion_pairs:
+                log_message(f"V3.5: Reconstructing amodal layer '{occluded_comp.semantic_name}' ({occluded_comp.id}) occluded by '{occluder_comp.semantic_name}' ({occluder_comp.id})...")
+                rel_amodal_path = renderer.render_amodal(original_dest, slide_task_dir, occluded_comp, occluder_comp)
+                occluded_comp.amodal_mask_path = rel_amodal_path
+                log_message(f"V3.5: Reconstructed amodal mask successfully. Saved to {rel_amodal_path}.")
+        except Exception as e_v3:
+            log_message(f"V3.5: Error during amodal segmentation: {e_v3}")
+        t_reconstruction = int((time.time() - t_start_v3) * 1000)
+        log_message(f"Stage 5b: Amodal Layer Reconstruction complete ({t_reconstruction}ms)")
+        
         # Generate erased background image in masks/background.png
         background_dest = os.path.join(dir_masks, "background.png")
         generate_erased_background(original_dest, components, background_dest)
@@ -208,6 +292,7 @@ def run_proof_pipeline():
             "segmentation_time_ms": t_segmentation,
             "ocr_time_ms": t_ocr,
             "understanding_time_ms": t_understanding,
+            "reconstruction_time_ms": t_reconstruction,
             "ppt_compile_time_ms": 0 # compiled later
         }
         
@@ -221,7 +306,8 @@ def run_proof_pipeline():
             routing_status=routing_status,
             average_confidence=float(round(avg_conf, 2)),
             file_type=class_res["fileType"],
-            content_type=class_res["contentType"]
+            content_type=class_res["contentType"],
+            occlusion_graph_json=occlusion_graph_json
         )
         slides_metadata.append(slide_meta)
         
@@ -245,7 +331,8 @@ def run_proof_pipeline():
             average_confidence=float(round(avg_conf, 2)),
             file_type=class_res["fileType"],
             content_type=class_res["contentType"],
-            metrics_json=metrics
+            metrics_json=metrics,
+            occlusion_graph_json=occlusion_graph_json
         )
         db.add(db_slide)
         db.flush() # flush to get primary key ID
@@ -268,7 +355,12 @@ def run_proof_pipeline():
                 visible=comp.visible,
                 z_index=comp.z_index,
                 associated_label_id=comp.associated_label_id,
-                associated_object_id=comp.associated_object_id
+                associated_object_id=comp.associated_object_id,
+                is_occluded=comp.is_occluded,
+                amodal_mask_path=comp.amodal_mask_path,
+                polygon_vertices_json=comp.polygon_vertices_json,
+                reconstruction_confidence=comp.reconstruction_confidence,
+                reconstruction_source=comp.reconstruction_source
             )
             db.add(db_comp)
             
